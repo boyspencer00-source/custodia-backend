@@ -113,3 +113,50 @@ Call flag_dispute only if the buyer explicitly reports a serious problem in text
             reason = block.input.get("reason") if isinstance(block.input, dict) else None
 
     return {"reply": reply.strip(), "action": action, "reason": reason}
+
+
+# ── Return product photo review ───────────────────────────────────────────────
+def review_return_photo(tx, image_data: str, caption: str = "") -> dict:
+    """
+    Reviews the SELLER's photo of the returned product.
+    Different prompt from the delivery review — we're confirming the seller
+    received an item back, not that the buyer received one.
+    """
+    if "," in image_data:
+        header, b64 = image_data.split(",", 1)
+        media_type  = header.split(":")[1].split(";")[0]
+    else:
+        b64, media_type = image_data, "image/jpeg"
+
+    system = f"""You are verifying a seller's proof-of-return photo for an escrow dispute.
+
+Item: {tx.item_description}
+
+The seller went to the buyer's location to collect the returned item.
+Decide ONE of:
+- "approve"  — the photo clearly shows a physical product being held or placed.
+               It doesn't need to be the exact same item — the seller just needs
+               to have *something* physical in hand at the buyer's location.
+               Approve if a product is visible, even if image quality is poor.
+- "reject"   — the photo shows nothing, is blank, is a selfie with no item,
+               or shows only a location with no product present.
+
+Reply ONLY with valid JSON:
+{{"decision": "approve" | "reject", "reason": "one sentence"}}"""
+
+    user_parts = [
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+        {"type": "text",  "text": f'Seller caption: "{caption}"' if caption else "No caption."},
+    ]
+
+    try:
+        resp = client.messages.create(
+            model=MODEL, max_tokens=150, system=system,
+            messages=[{"role": "user", "content": user_parts}],
+        )
+        result = json.loads(resp.content[0].text.strip())
+        if result.get("decision") not in ("approve", "reject"):
+            raise ValueError
+        return result
+    except Exception:
+        return {"decision": "reject", "reason": "Could not read the photo. Please resend."}
